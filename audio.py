@@ -137,13 +137,14 @@ def video_to_audio(video_path, output_audio_path=None, format='mp3'):
 
 
 if __name__ == "__main__":
+    SCRIPT_DIR = Path(__file__).parent.resolve()
     print("🚀 Starting automated video-to-audio converter...\n")
 
     # Step 1: Install FFmpeg automatically (if needed)
     install_ffmpeg()
 
     # Step 2: Use YOUR video file — located at ../Video/videoplayback.mp4
-    your_video_path = "./Video/videoplayback.mp4"
+    your_video_path = SCRIPT_DIR / "Video" / "videoplayback.mp4"
 
     print(f"📁 Using video file: {your_video_path}")
 
@@ -154,7 +155,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Step 3: Convert to audio
-    audio_file = "videoplayback.mp3"
-    video_to_audio(your_video_path, audio_file)
+     # Step 3: Convert to audio — save in script directory
+    audio_file = SCRIPT_DIR / "videoplayback.mp3"
+    video_to_audio(str(your_video_path), str(audio_file))
 
     print("\n🎉 All done! Your audio file is ready.")

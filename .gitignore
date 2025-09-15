@@ -2,3 +2,4 @@ Video/*
 *.mp3
 *.txt
 *.gguf
+.env

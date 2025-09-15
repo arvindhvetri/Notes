@@ -7,8 +7,9 @@ import whisper
 import sys
 
 # CONFIGURATION
-AUDIO_FILE = "videoplayback.mp3"          # Your input file
-OUTPUT_FILE = "transcript.txt"           # Final output
+SCRIPT_DIR = Path(__file__).parent.resolve()
+AUDIO_FILE = SCRIPT_DIR/"videoplayback.mp3"          # Your input file
+OUTPUT_FILE = SCRIPT_DIR/"transcript.txt"           # Final output
 CHUNK_DURATION = 600                     # 10 minutes in seconds
 MODEL_SIZE = "tiny"                      # Fastest accurate model
 NUM_WORKERS = os.cpu_count()             # Use all CPU cores
