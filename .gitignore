@@ -3,3 +3,5 @@ Video/*
 *.txt
 *.gguf
 .env
+ffmpeg/*
+Output/*

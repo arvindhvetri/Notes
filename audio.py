@@ -3,36 +3,37 @@ import os
 import sys
 import platform
 from pathlib import Path
+import urllib.request
+import zipfile
+import winreg
+import re
 
-def install_ffmpeg():
+def install_ffmpeg(progress_queue):
     """
     Automatically installs FFmpeg on Windows, macOS, or Linux.
     Adds to PATH if necessary.
     """
     system = platform.system().lower()
-    print(f"🔍 Detecting OS: {system}")
+    progress_queue.put(f"🔍 Detecting OS: {system}")
 
-    # Check if ffmpeg is already installed
     try:
         result = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if result.returncode == 0:
-            print("✅ FFmpeg is already installed.")
+            progress_queue.put("✅ FFmpeg is already installed.")
             return
     except FileNotFoundError:
-        pass  # ffmpeg not found — proceed to install
+        pass
 
-    print("⏳ Installing FFmpeg...")
+    progress_queue.put("⏳ Installing FFmpeg...")
 
     if system == "windows":
         zip_path = "ffmpeg.zip"
         url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 
         try:
-            import urllib.request
-            print("📥 Downloading FFmpeg...")
+            progress_queue.put("📥 Downloading FFmpeg...")
             urllib.request.urlretrieve(url, zip_path)
-
-            import zipfile
+            
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall("ffmpeg")
 
@@ -42,64 +43,55 @@ def install_ffmpeg():
             os.environ["PATH"] = str(ffmpeg_bin) + os.pathsep + os.environ["PATH"]
 
             try:
-                import winreg
                 key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
                 current_path, _ = winreg.QueryValueEx(key, "Path")
                 if str(ffmpeg_bin) not in current_path:
                     winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, str(ffmpeg_bin) + os.pathsep + current_path)
-                    print(f"📌 Added FFmpeg to user PATH: {ffmpeg_bin}")
+                    progress_queue.put(f"📌 Added FFmpeg to user PATH: {ffmpeg_bin}")
                 winreg.CloseKey(key)
             except Exception as e:
-                print(f"⚠️ Could not modify registry PATH: {e} (but session PATH is set)")
+                progress_queue.put(f"⚠️ Could not modify registry PATH: {e} (but session PATH is set)")
 
-            print("✅ FFmpeg installed and added to PATH (session).")
+            progress_queue.put("✅ FFmpeg installed and added to PATH (session).")
             os.remove(zip_path)
 
         except Exception as e:
-            print(f"❌ Failed to install FFmpeg on Windows: {e}")
+            progress_queue.put(f"❌ Failed to install FFmpeg on Windows: {e}")
             sys.exit(1)
 
-    elif system == "darwin":  # macOS
+    elif system == "darwin":
         try:
             subprocess.run(["brew", "install", "ffmpeg"], check=True)
-            print("✅ FFmpeg installed via Homebrew.")
+            progress_queue.put("✅ FFmpeg installed via Homebrew.")
         except FileNotFoundError:
-            print("❌ Homebrew not found. Please install Homebrew first: https://brew.sh/")
+            progress_queue.put("❌ Homebrew not found. Please install Homebrew first.")
             sys.exit(1)
         except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to install FFmpeg via brew: {e}")
+            progress_queue.put(f"❌ Failed to install FFmpeg via brew: {e}")
             sys.exit(1)
 
     elif system == "linux":
         try:
             subprocess.run(["sudo", "apt-get", "update"], check=True)
             subprocess.run(["sudo", "apt-get", "install", "-y", "ffmpeg"], check=True)
-            print("✅ FFmpeg installed via apt.")
+            progress_queue.put("✅ FFmpeg installed via apt.")
         except subprocess.CalledProcessError:
             try:
                 subprocess.run(["sudo", "yum", "install", "-y", "ffmpeg"], check=True)
-                print("✅ FFmpeg installed via yum.")
+                progress_queue.put("✅ FFmpeg installed via yum.")
             except subprocess.CalledProcessError:
                 try:
                     subprocess.run(["sudo", "dnf", "install", "-y", "ffmpeg"], check=True)
-                    print("✅ FFmpeg installed via dnf.")
+                    progress_queue.put("✅ FFmpeg installed via dnf.")
                 except subprocess.CalledProcessError:
-                    print("❌ Could not install FFmpeg via apt/yum/dnf. Try manually: https://ffmpeg.org/download.html")
+                    progress_queue.put("❌ Could not install FFmpeg.")
                     sys.exit(1)
     else:
-        print(f"❌ Unsupported OS: {system}. Please install FFmpeg manually: https://ffmpeg.org/download.html")
+        progress_queue.put(f"❌ Unsupported OS: {system}.")
         sys.exit(1)
 
 
-def video_to_audio(video_path, output_audio_path=None, format='mp3'):
-    """
-    Convert video file to audio using FFmpeg (fast, no re-encoding if possible)
-    Works perfectly for 1hr+ files.
-
-    :param video_path: Path to input video file
-    :param output_audio_path: Optional output path. If None, uses video name + .mp3
-    :param format: Output format ('mp3', 'aac', 'wav', etc.)
-    """
+def video_to_audio(video_path, output_audio_path=None, format='mp3', progress_queue=None):
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
@@ -107,56 +99,57 @@ def video_to_audio(video_path, output_audio_path=None, format='mp3'):
         base_name = os.path.splitext(video_path)[0]
         output_audio_path = f"{base_name}.{format}"
 
-    # Build FFmpeg command
     cmd = ['ffmpeg', '-i', video_path, '-vn', '-y', output_audio_path]
 
     if format == 'mp3':
-        # For MP3: Must re-encode AAC → MP3
-        cmd[4:4] = ['-acodec', 'libmp3lame', '-b:a', '192k']  # Insert after -i
+        cmd[4:4] = ['-acodec', 'libmp3lame', '-b:a', '192k']
     elif format == 'aac':
-        # For AAC: Can copy if source is AAC
         cmd[4:4] = ['-acodec', 'copy']
     elif format == 'wav':
-        # For WAV: Copy or decode to PCM
-        cmd[4:4] = ['-acodec', 'pcm_s16le']  # Standard 16-bit PCM
+        cmd[4:4] = ['-acodec', 'pcm_s16le']
     else:
-        # Default: try to copy if possible, else default to mp3
         cmd[4:4] = ['-acodec', 'copy']
 
-    #progress bar   
-    cmd.extend(['-progress', 'pipe:1', '-loglevel', 'info'])
-    print(f"🎬 Converting '{video_path}' to '{output_audio_path}'...")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    progress_queue.put(f"🎬 Converting '{os.path.basename(video_path)}' to audio...")
 
-    if result.returncode == 0:
-        print(f"✅ Success! Audio saved to: {output_audio_path}")
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    total_duration = None
+    time_regex = re.compile(r'time=(\d{2}):(\d{2}):(\d{2})\.\d{2}')
+
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            break
+
+        if "Duration" in line and total_duration is None:
+            match = re.search(r'Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}', line)
+            if match:
+                hours, minutes, seconds = map(int, match.groups())
+                total_duration = hours * 3600 + minutes * 60 + seconds
+        
+        time_match = time_regex.search(line)
+        if time_match and total_duration:
+            hours, minutes, seconds = map(int, time_match.groups())
+            current_time = hours * 3600 + minutes * 60 + seconds
+            progress = int((current_time / total_duration) * 100)
+            progress_queue.put(f"PROGRESS:{progress}")
+            progress_queue.put(f"⏱️  Converting: {progress}%")
+
+    process.wait()
+
+    if process.returncode == 0:
+        progress_queue.put(f"✅ Success! Audio saved.")
     else:
-        print("❌ Error during conversion:")
-        print(result.stdout)
+        progress_queue.put("❌ Error during conversion.")
         raise RuntimeError("FFmpeg conversion failed.")
-
-
-if __name__ == "__main__":
+    
+def start_audio(video_path, progress_queue):
     SCRIPT_DIR = Path(__file__).parent.resolve()
-    print("🚀 Starting automated video-to-audio converter...\n")
+    audio_output_dir = SCRIPT_DIR / "Output" / "Audio"
+    audio_path = audio_output_dir / "videoplayback.mp3"
 
-    # Step 1: Install FFmpeg automatically (if needed)
-    install_ffmpeg()
+    os.makedirs(audio_output_dir, exist_ok=True)
 
-    # Step 2: Use YOUR video file — located at ../Video/videoplayback.mp4
-    your_video_path = SCRIPT_DIR / "Video" / "videoplayback.mp4"
-
-    print(f"📁 Using video file: {your_video_path}")
-
-    # Validate the file exists
-    if not os.path.exists(your_video_path):
-        print(f"❌ ERROR: Video file not found at:\n{os.path.abspath(your_video_path)}")
-        print("Please ensure the file exists at: ../Video/videoplayback.mp4")
-        sys.exit(1)
-
-    # Step 3: Convert to audio
-     # Step 3: Convert to audio — save in script directory
-    audio_file = SCRIPT_DIR / "videoplayback.mp3"
-    video_to_audio(str(your_video_path), str(audio_file))
-
-    print("\n🎉 All done! Your audio file is ready.")
+    install_ffmpeg(progress_queue)
+    video_to_audio(str(video_path), str(audio_path), progress_queue=progress_queue)

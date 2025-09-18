@@ -1,3 +1,4 @@
+# text.py
 import os
 import subprocess
 import concurrent.futures
@@ -5,11 +6,12 @@ import tempfile
 from pathlib import Path
 import whisper
 import sys
+import queue
 
 # CONFIGURATION
 SCRIPT_DIR = Path(__file__).parent.resolve()
-AUDIO_FILE = SCRIPT_DIR/"videoplayback.mp3"          # Your input file
-OUTPUT_FILE = SCRIPT_DIR/"transcript.txt"           # Final output
+AUDIO_FILE = SCRIPT_DIR/"Output"/"Audio"/"videoplayback.mp3"          # Your input file
+
 CHUNK_DURATION = 600                     # 10 minutes in seconds
 MODEL_SIZE = "tiny"                      # Fastest accurate model
 NUM_WORKERS = os.cpu_count()             # Use all CPU cores
@@ -26,8 +28,7 @@ def get_audio_duration(audio_path):
 
 def split_audio_into_chunks(audio_path, chunk_duration=600):
     """Split audio into chunks of chunk_duration seconds. Returns list of chunk filenames."""
-    print(f"✂️  Splitting '{audio_path}' into {chunk_duration}-second chunks...")
-
+    
     total_duration = get_audio_duration(audio_path)
     num_chunks = int(total_duration // chunk_duration) + 1
 
@@ -40,7 +41,6 @@ def split_audio_into_chunks(audio_path, chunk_duration=600):
         chunks.append(chunk_name)
 
         if os.path.exists(chunk_name):
-            print(f"⏭️  Chunk {i} already exists: {chunk_name}")
             continue
 
         cmd = [
@@ -56,12 +56,11 @@ def split_audio_into_chunks(audio_path, chunk_duration=600):
         ]
 
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"📦 Created: {chunk_name}")
 
     return chunks
 
 
-def transcribe_chunk(chunk_path):
+def transcribe_chunk(chunk_path, progress_queue):
     """Transcribe a single audio chunk using tiny model."""
     try:
         model = whisper.load_model(MODEL_SIZE)
@@ -75,12 +74,13 @@ def transcribe_chunk(chunk_path):
         )
         return result["text"].strip()
     except Exception as e:
+        progress_queue.put(f"[ERROR transcribing {chunk_path}: {str(e)}]")
         return f"[ERROR transcribing {chunk_path}: {str(e)}]"
 
 
-def transcribe_single_file(audio_path):
+def transcribe_single_file(audio_path, progress_queue):
     """Transcribe entire file without splitting."""
-    print(f"🎙️  Transcribing entire file '{audio_path}' (single pass)...")
+    progress_queue.put("🎙️  Transcribing entire file... (single pass)")
     model = whisper.load_model(MODEL_SIZE)
     result = model.transcribe(
         audio_path,
@@ -93,43 +93,51 @@ def transcribe_single_file(audio_path):
     return result["text"].strip()
 
 
-def merge_transcriptions(transcriptions, output_file):
-    """Write all transcriptions to final file."""
-    print(f"📝 Merging results into '{output_file}'...")
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for text in transcriptions:
-            f.write(text + "\n\n")
-
-
-if __name__ == "__main__":
-    print("🚀 Starting smart audio-to-text transcription...\n")
-
+def start_text(progress_queue):
     if not os.path.exists(AUDIO_FILE):
-        print(f"❌ ERROR: Audio file not found: {AUDIO_FILE}")
+        progress_queue.put("❌ ERROR: Audio file not found!")
         sys.exit(1)
 
     duration = get_audio_duration(AUDIO_FILE)
-    print(f"⏱️  Audio duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
-
     if duration < CHUNK_DURATION:
-        print("🎯 File is under 10 minutes → Transcribing as single unit (fastest mode)")
-        text = transcribe_single_file(AUDIO_FILE)
-        merge_transcriptions([text], OUTPUT_FILE)
+        progress_queue.put("🎯 File is under 10 minutes. Transcribing as single unit.")
+        transcription = transcribe_single_file(AUDIO_FILE, progress_queue)
+        final_content = transcription
     else:
-        print(f"📊 File is over 10 minutes → Splitting into {int(duration // CHUNK_DURATION) + 1} chunks and transcribing in parallel")
+        progress_queue.put(f"📊 File is over 10 minutes. Splitting into {int(duration // CHUNK_DURATION) + 1} chunks and transcribing in parallel.")
         chunks = split_audio_into_chunks(AUDIO_FILE, CHUNK_DURATION)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            futures = [executor.submit(transcribe_chunk, chunk) for chunk in chunks]
-            results = [future.result() for future in futures]
+            futures = {executor.submit(transcribe_chunk, chunk, progress_queue): chunk for chunk in chunks}
+            
+            completed_count = 0
+            for future in concurrent.futures.as_completed(futures):
+                completed_count += 1
+                progress = int((completed_count / len(chunks)) * 100)
+                progress_queue.put(f"PROGRESS:{progress}")
+                progress_queue.put(f"🎙️  Completed transcription for chunk {completed_count}/{len(chunks)}.")
+                
+            results = [f.result() for f in futures]
+            final_content = "\n\n".join(results)
 
-        merge_transcriptions(results, OUTPUT_FILE)
-
-        # Clean up chunks
-        print("🧹 Cleaning up temporary chunks...")
+        progress_queue.put("🧹 Cleaning up temporary chunks...")
         for chunk in chunks:
             if os.path.exists(chunk):
                 os.remove(chunk)
-                print(f"🗑️  Deleted: {chunk}")
+                progress_queue.put(f"🗑️  Deleted: {os.path.basename(chunk)}")
+    
+    # Send the final content back to the frontend
+    progress_queue.put(f"FINAL_CONTENT:{final_content}")
 
-    print(f"\n🎉 All done! Transcript saved to: {OUTPUT_FILE}")
+def save_final_transcript(content, filename):
+    """Saves the transcribed content to a file with the provided filename."""
+    SCRIPT_DIR = Path(__file__).parent.resolve()
+    output_dir = SCRIPT_DIR/"Output"/"Text"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    final_path = output_dir / filename
+    
+    with open(final_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+        
+    return str(final_path)
