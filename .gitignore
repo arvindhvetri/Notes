@@ -5,3 +5,6 @@ Video/*
 .env
 ffmpeg/*
 Output/*
+notes4.py
+notes3.py
+*.pdf
