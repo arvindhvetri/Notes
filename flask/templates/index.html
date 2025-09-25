@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video to Notes Pipeline</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; background-color: #f4f4f9; color: #333; max-width: 800px; margin: 40px auto; padding: 20px; }
+        .container { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        h1 { color: #444; text-align: center; }
+        #upload-form { display: flex; flex-direction: column; align-items: center; gap: 15px; margin-bottom: 20px; }
+        input[type="file"] { border: 1px solid #ddd; padding: 10px; border-radius: 5px; }
+        button { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; transition: background-color 0.2s; }
+        button:disabled { background-color: #a0cfff; cursor: not-allowed; }
+        #progress-container { border: 1px solid #e0e0e0; padding: 20px; margin-top: 20px; border-radius: 5px; display: none; }
+        #progress-log { list-style-type: none; padding: 0; max-height: 300px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 14px; }
+        #progress-log li { padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+        #progress-log li.highlight { font-weight: bold; color: #0056b3; }
+        #progress-bar-container { width: 100%; background-color: #e9ecef; border-radius: 5px; overflow: hidden; margin: 10px 0; }
+        #progress-bar { width: 0%; height: 20px; background-color: #28a745; transition: width 0.4s ease; text-align: center; color: white; }
+        #download-link { text-align: center; margin-top: 20px; display: none; }
+        #download-link a { font-size: 1.2em; font-weight: bold; text-decoration: none; background-color: #28a745; color: white; padding: 10px 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Video to PDF Notes Generator</h1>
+        <form id="upload-form">
+            <input type="file" id="videoFile" name="videoFile" accept="video/*" required>
+            <button type="submit" id="submit-btn">Generate Notes</button>
+        </form>
+
+        <div id="progress-container">
+            <h3>Processing...</h3>
+            <div id="progress-bar-container">
+                <div id="progress-bar">0%</div>
+            </div>
+            <ul id="progress-log"></ul>
+        </div>
+        
+        <div id="download-link"></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const submitBtn = document.getElementById('submit-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const progressLog = document.getElementById('progress-log');
+        const downloadLinkContainer = document.getElementById('download-link');
+
+        let intervalId = null;
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Reset UI
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+            progressContainer.style.display = 'block';
+            downloadLinkContainer.style.display = 'none';
+            progressLog.innerHTML = '';
+            updateProgressBar(0);
+            
+            const formData = new FormData();
+            formData.append('videoFile', document.getElementById('videoFile').files[0]);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) throw new Error('Upload failed');
+                
+                const data = await response.json();
+                if (data.task_id) {
+                    pollProgress(data.task_id);
+                } else {
+                    addLog('Error starting task.', true);
+                }
+            } catch (error) {
+                addLog(`Error: ${error.message}`, true);
+                resetUI();
+            }
+        });
+
+        function pollProgress(taskId) {
+            intervalId = setInterval(async () => {
+                try {
+                    const response = await fetch(`/progress/${taskId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'running') {
+                        const message = data.message;
+                        if (message.startsWith('PROGRESS:')) {
+                            const percent = parseInt(message.split(':')[1], 10);
+                            updateProgressBar(percent);
+                        } else if (message.startsWith('FINAL_PDF:')) {
+                            const filename = message.split(':')[1];
+                            addLog('🎉 Pipeline Complete! Your file is ready.', true);
+                            showDownloadLink(filename);
+                            clearInterval(intervalId);
+                            resetUI(true);
+                        } else if (message === 'TASK_COMPLETE') {
+                             clearInterval(intervalId);
+                             resetUI(true);
+                        } else if (message.includes('ERROR')) {
+                            addLog(message, true);
+                            clearInterval(intervalId);
+                            resetUI();
+                        }
+                        else {
+                            addLog(message);
+                        }
+                    }
+                } catch (error) {
+                    addLog('Error polling progress.', true);
+                    clearInterval(intervalId);
+                    resetUI();
+                }
+            }, 1500);
+        }
+
+        function addLog(message, isHighlight = false) {
+            const li = document.createElement('li');
+            li.textContent = message;
+            if (isHighlight) {
+                li.classList.add('highlight');
+            }
+            progressLog.appendChild(li);
+            li.scrollIntoView();
+        }
+
+        function updateProgressBar(percent) {
+            progressBar.style.width = `${percent}%`;
+            progressBar.textContent = `${percent}%`;
+        }
+        
+        function showDownloadLink(filename) {
+            downloadLinkContainer.innerHTML = `<a href="/download/${filename}" download>Download PDF Notes</a>`;
+            downloadLinkContainer.style.display = 'block';
+        }
+
+        function resetUI(isSuccess = false) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = isSuccess ? 'Generate Another' : 'Try Again';
+        }
+    </script>
+</body>
+</html>
