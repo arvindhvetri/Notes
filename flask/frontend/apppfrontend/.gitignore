@@ -1,14 +1,3 @@
-Video/*
-*.mp3
-*.txt
-*.gguf
-.env
-ffmpeg/*
-Output/*
-notes4.py
-notes3.py
-*.pdf
-
 # Logs
 logs
 *.log
